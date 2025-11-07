@@ -1,7 +1,12 @@
 package io.example.api;
 
 import java.util.Collections;
+import java.util.List;
 
+import io.example.application.BookingSlotEntity;
+import io.example.application.ParticipantSlotEntity;
+import io.example.application.ParticipantSlotsView;
+import io.example.domain.Participant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,8 +40,7 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
     // "available" at the time of booking.
     @Post("/bookings/{slotId}")
     public HttpResponse createBooking(String slotId, BookingRequest request) {
-        log.info("Creating booking for slot {}: {}", slotId, request);
-
+        // String studentId, String aircraftId, String instructorId, String bookingId
         // Implementation here
 
         // Make sure to get a flight conditions report from the AI agent and use that
@@ -147,9 +151,16 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
         if (participantBookedSlots.slots().isEmpty()) {
             log.info("Marking timeslot available for entity {}", slotId);
 
-        // Add entity client to mark slot available
+            // Add entity client to mark slot available
+            componentClient
+                    .forEventSourcedEntity(slotId)
+                    .method(BookingSlotEntity::markSlotAvailable)
+                    .invoke(new BookingSlotEntity.Command.MarkSlotAvailable(new Participant(request.participantId, participantType)));
 
-        return HttpResponses.ok();
+            return HttpResponses.ok();
+        } else  {
+            throw HttpException.badRequest("Participant: "+request.participantId+" is already booked on to this time slot");
+        }
     }
 
     // Unmarks a slot as available for the given participant.

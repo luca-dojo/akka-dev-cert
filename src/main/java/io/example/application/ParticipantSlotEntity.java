@@ -4,7 +4,9 @@ import akka.Done;
 import akka.javasdk.annotations.ComponentId;
 import akka.javasdk.annotations.TypeName;
 import akka.javasdk.eventsourcedentity.EventSourcedEntity;
+import io.example.domain.BookingEvent;
 import io.example.domain.Participant.ParticipantType;
+import io.example.domain.Timeslot;
 
 @ComponentId("participant-slot")
 public class ParticipantSlotEntity
