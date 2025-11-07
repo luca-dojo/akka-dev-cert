@@ -42,7 +42,29 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
         // Make sure to get a flight conditions report from the AI agent and use that
         // to decide if the booking can be created
 
-        return HttpResponses.created();
+        var areParticipantsAvailable = areParticipantsStatus(request.studentId, request.aircraftId, request.instructorId, "AVAILABLE");
+        if (areParticipantsAvailable.studentState && areParticipantsAvailable.aircraftState && areParticipantsAvailable.instructorState) {
+            log.info("Creating booking for slot {}: {}", slotId, request);
+            componentClient
+                    .forEventSourcedEntity(slotId)
+                    .method(BookingSlotEntity::bookSlot)
+                    .invoke(new BookingSlotEntity.Command.BookReservation(
+                            request.studentId,
+                            request.aircraftId,
+                            request.instructorId,
+                            request.bookingId
+                    ));
+            return HttpResponses.created();
+        } else {
+            StringBuilder unavailable = new StringBuilder("ERROR: Cannot book timeslot as following participants are unavailable: ");
+            if (!areParticipantsAvailable.studentState) unavailable.append("Student ");
+            if (!areParticipantsAvailable.aircraftState) unavailable.append("Aircraft ");
+            if (!areParticipantsAvailable.instructorState) unavailable.append("Instructor ");
+
+            String message = unavailable.toString().trim().replaceAll(" +", " ");
+            log.warn("Booking creation failed for slot {}: {}", slotId, message);
+            return HttpResponses.badRequest(message);
+        }
     }
 
     // Cancels an existing booking. Note that both the slot
@@ -51,9 +73,27 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
     public HttpResponse cancelBooking(String slotId, String bookingId) {
         log.info("Canceling booking id {}", bookingId);
 
-        // Add booking cancellation code
+        try {
+            // get participants by booking id
+            var bookedParticipants = componentClient
+                    .forView()
+                    .method(ParticipantSlotsView::getsParticipantsByBookingIdAndStatus)
+                    .invoke(new ParticipantSlotsView.BookingStatusInput(bookingId, "BOOKED"));
 
-        return HttpResponses.ok();
+            if (bookedParticipants.slots().size() >= 3) {
+                // Add booking cancellation code
+                componentClient
+                        .forEventSourcedEntity(slotId)
+                        .method(BookingSlotEntity::cancelBooking)
+                        .invoke(bookingId);
+                return HttpResponses.ok();
+            } else {
+                log.warn("Booking creation failed for slot: {}", bookingId);
+                return HttpResponses.badRequest("No Booking with id: "+bookingId);
+            }
+        } catch (Exception e) {
+            return HttpResponses.badRequest("Booking could not be cancelled");
+        }
     }
 
     // Retrieves all slots in which a given participant has the supplied status.
@@ -62,8 +102,10 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
     public SlotList slotsByStatus(String participantId, String status) {
 
         // Add view query
-
-        return new SlotList(Collections.emptyList());
+        return componentClient
+                .forView()
+                .method(ParticipantSlotsView::getSlotsByParticipantAndStatus)
+                .invoke(new ParticipantSlotsView.ParticipantStatusInput(participantId, status.toUpperCase()));
     }
 
     // Returns the internal availability state for a given slot
@@ -71,9 +113,16 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
     public Timeslot getSlot(String slotId) {
 
         // Add entity state request
-
-        return new Timeslot(Collections.emptySet(),
-                Collections.emptySet());
+        try {
+            return componentClient
+                    .forEventSourcedEntity(slotId)
+                    .method(BookingSlotEntity::getSlot)
+                    .invoke();
+        } catch (Exception e) {
+            log.warn("No timeslot with id: {}", slotId);
+            return new Timeslot(Collections.emptySet(),
+                    Collections.emptySet());
+        }
     }
 
     // Indicates that the supplied participant is available for booking
@@ -89,7 +138,14 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
             throw HttpException.badRequest("invalid participant type");
         }
 
-        log.info("Marking timeslot available for entity {}", slotId);
+        // checking that a participant is not already booked on the chosen slot
+        var participantBookedSlots = componentClient
+                .forView()
+                .method(ParticipantSlotsView::getSlotsByParticipantAndStatus)
+                .invoke(new ParticipantSlotsView.ParticipantStatusInput(request.participantId, "BOOKED"));
+
+        if (participantBookedSlots.slots().isEmpty()) {
+            log.info("Marking timeslot available for entity {}", slotId);
 
         // Add entity client to mark slot available
 
@@ -106,10 +162,24 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
             log.warn("Bad participant type {}", request.participantType());
             throw HttpException.badRequest("invalid participant type");
         }
+        // checking that a participant is not already booked on the chosen slot
+        var participantBookedSlots = componentClient
+                .forView()
+                .method(ParticipantSlotsView::getSlotsByParticipantAndStatus)
+                .invoke(new ParticipantSlotsView.ParticipantStatusInput(request.participantId, "BOOKED"));
 
-        // Add codce to unmark slot as available
+        if (participantBookedSlots.slots().isEmpty()) {
 
-        return HttpResponses.ok();
+            // Add code to unmark slot as available
+            componentClient
+                    .forEventSourcedEntity(slotId)
+                    .method(BookingSlotEntity::unmarkSlotAvailable)
+                    .invoke(new BookingSlotEntity.Command.UnmarkSlotAvailable(new Participant(request.participantId, participantType)));
+
+            return HttpResponses.ok();
+        } else {
+            throw HttpException.badRequest("Participant: "+request.participantId+" is already booked on to this time slot, cannot mark unavailable.");
+        }
     }
 
     // Public API representation of a booking request
@@ -119,5 +189,29 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
 
     // Public API representation of an availability mark/unmark request
     public record AvailabilityRequest(String participantId, String participantType) {
+    }
+
+    // Public record to store state of participant status
+    public record ParticipantIsState(Boolean studentState, Boolean aircraftState, Boolean instructorState) {}
+    public ParticipantIsState areParticipantsStatus(String studentId, String aircraftId, String instructorId, String status) {
+        var studentSlotRow = componentClient.forView()
+                .method(ParticipantSlotsView::getSlotsByParticipant)
+                .invoke(studentId);
+        var aircraftSlotRow = componentClient.forView()
+                .method(ParticipantSlotsView::getSlotsByParticipant)
+                .invoke(aircraftId);
+        var instructorSlotRow = componentClient.forView()
+                .method(ParticipantSlotsView::getSlotsByParticipant)
+                .invoke(instructorId);
+
+        return new ParticipantIsState(studentSlotRow.slots()
+                .stream()
+                .anyMatch(slotRow -> status.equals(slotRow.status())),
+                aircraftSlotRow.slots()
+                .stream()
+                .anyMatch(slotRow -> status.equals(slotRow.status())),
+                instructorSlotRow.slots()
+                .stream()
+                .anyMatch(slotRow -> status.equals(slotRow.status())));
     }
 }
