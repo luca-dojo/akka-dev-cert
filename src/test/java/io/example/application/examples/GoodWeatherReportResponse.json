@@ -1,0 +1,59 @@
+{
+  "request": {
+    "type": "City",
+    "query": "London, United Kingdom",
+    "language": "en",
+    "unit": "m"
+  },
+  "location": {
+    "name": "London",
+    "country": "United Kingdom",
+    "region": "City of London, Greater London",
+    "lat": "51.517",
+    "lon": "-0.106",
+    "timezone_id": "Europe/London",
+    "localtime": "2025-11-11 13:36",
+    "localtime_epoch": 1762868160,
+    "utc_offset": "0.0"
+  },
+  "current": {
+    "observation_time": "01:36 PM",
+    "temperature": 15,
+    "weather_code": 116,
+    "weather_icons": [
+      "https://cdn.worldweatheronline.com/images/wsymbols01_png_64/wsymbol_0002_sunny_intervals.png"
+    ],
+    "weather_descriptions": [
+      "Partly cloudy"
+    ],
+    "astro": {
+      "sunrise": "07:12 AM",
+      "sunset": "04:16 PM",
+      "moonrise": "10:14 PM",
+      "moonset": "01:24 PM",
+      "moon_phase": "Waning Gibbous",
+      "moon_illumination": 63
+    },
+    "air_quality": {
+      "co": "142.85",
+      "no2": "14.55",
+      "o3": "69",
+      "so2": "2.55",
+      "pm2_5": "7.35",
+      "pm10": "8.95",
+      "us-epa-index": "1",
+      "gb-defra-index": "1"
+    },
+    "wind_speed": 21,
+    "wind_degree": 196,
+    "wind_dir": "SSW",
+    "pressure": 1005,
+    "precip": 0,
+    "humidity": 82,
+    "cloudcover": 50,
+    "feelslike": 15,
+    "uv_index": 1,
+    "visibility": 10,
+    "is_day": "yes"
+  }
+}
