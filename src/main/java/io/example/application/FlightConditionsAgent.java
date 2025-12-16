@@ -8,11 +8,15 @@ import akka.javasdk.client.ComponentClient;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /*
  * The flight conditions agent is responsible for making a determination about the flight
@@ -32,9 +36,12 @@ import java.time.format.DateTimeFormatter;
 public class FlightConditionsAgent extends Agent {
 
     private final ComponentClient componentClient;
+    private final GoogleWeatherSerivce googleWeatherSerivce;
+
 
     public FlightConditionsAgent(ComponentClient componentClient) {
         this.componentClient = componentClient;
+        this.googleWeatherSerivce = new GoogleWeatherSerivce();
     }
 
     public record ConditionsReport(String timeSlotId, Boolean meetsRequirements, String justification) {
@@ -47,23 +54,46 @@ public class FlightConditionsAgent extends Agent {
             you to determine if the weather is suitable enough for safe flying on the given day.
             
             You have the ability to getWeatherForecast which will provide you with an api response from a weather forecast service,
-            from this response you should concentrate on:
-                "temperature": >0,
-                "wind_speed": <35,
-                "visibility": >2,
-                and
-                "sunrise": "XX:XX AM/PM",
-                "sunset": "XX:XX AM/PM",
-                "weather_descriptions": [ "..." ],
+            you should find the correct forecast hour associated with the flight session, you can find the interval in
+            the response and it will look like this:
+             {
+              "forecastHours": [
+                {
+                  "interval": {
+                    "startTime": "yyyy-mm-ddThh:mm:ssZ",
+                    "endTime": "yyyy-mm-ddThh:mm:ssZ"
+            
+            and then from the rest of the response you should concentrate on the following parameters below and their acceptable values:
+                "temperature": {
+                    "unit": "CELSIUS",
+                    "degrees": x
+                 },
+                "wind": {
+                    "speed": {
+                      "unit": "KILOMETERS_PER_HOUR",
+                      "value": y
+                    },
+                    "gust": {
+                      "unit": "KILOMETERS_PER_HOUR",
+                      "value": z
+                    }
+                  },
+                  "visibility": {
+                    "unit": "KILOMETERS",
+                    "distance": w
+                  },
+              "isDaytime": boolean,
+              "thunderstormProbability": int,
             
             Safe flying conditions:
-                wind_speed is below 35,
-                safe visibility is above 2
-                time of the flight should be during the day ie. between sunrise and sunset.
-                temperature should be above 0
-                weather_descriptions does not indicate any snowy conditions or heavy rain.
+                temperature degrees > 0
+                wind speed value is below 30,
+                wind gust value is below 45,
+                visibility distance is above 10
+                time of the flight should be during the day for the timeslot provided ie. isDaytime = True
+                thunderstormProbability < 30
             
-            The output of you response MUST be a json with this exact structure:
+            The output of your response MUST be a json with this exact structure:
             {
                 timeSlotId: "..."
                 meetsRequirements: "..."
@@ -78,7 +108,8 @@ public class FlightConditionsAgent extends Agent {
             You should not reply with anything else since you life depends on it.
             """.stripIndent();
 
-    public record AgentCommand(String timeSlotId, String location) {}
+    public record AgentCommand(String timeSlotId, String location) {
+    }
 
     public Effect<ConditionsReport> weatherReport(AgentCommand cmd) {
         var model = ModelProvider.fromConfig("gemini-flash");
@@ -100,21 +131,12 @@ public class FlightConditionsAgent extends Agent {
      * suitable weather
      * conditions and poor weather conditions from this tool function for testing.
      */
-    @FunctionTool(description = "Queries the weather conditions as they are forecasted based on the time slot ID of the training session booking")
-    private String getWeatherForecast(String timeSlotId, String location) throws IOException, InterruptedException {
-
-        String baseUrl = "https://api.weatherstack.com/current";
-        String apiKey = System.getenv("WEATHERSTACK_API_KEY");
-        String url = String.format("%s?access_key=%s&query=%s", baseUrl, apiKey, location);
-
-        HttpClient client = HttpClient.newHttpClient();
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .GET()
-                .build();
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-        return response.body();
+    @FunctionTool(description = "Queries the weather conditions using Google Maps Platform based on the location")
+    private String getWeatherForecast(String timeSlotId, String location) {
+        return googleWeatherSerivce.getGoogleWeather(timeSlotId, location);
     }
 }
+
+
 
 
