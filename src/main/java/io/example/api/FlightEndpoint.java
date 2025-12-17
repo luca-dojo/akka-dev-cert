@@ -48,6 +48,19 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
         // Check to see if slot provided is valid
         isSlotIdValid(slotId, true);
 
+        // For no availability we need to reject the request
+        var areParticipantsAvailable = areParticipantsStatus(slotId, request.studentId, request.aircraftId, request.instructorId, "AVAILABLE");
+        if(!areParticipantsAvailable.studentState || !areParticipantsAvailable.aircraftState || !areParticipantsAvailable.instructorState) {
+            StringBuilder unavailable = new StringBuilder("ERROR! Cannot book timeslot as following participants are unavailable: ");
+            if (!areParticipantsAvailable.studentState) unavailable.append("Student ");
+            if (!areParticipantsAvailable.aircraftState) unavailable.append("Aircraft ");
+            if (!areParticipantsAvailable.instructorState) unavailable.append("Instructor ");
+
+            String message = unavailable.toString().trim().replaceAll(" +", " ");
+            log.warn("Booking creation failed for slot {}: {}", slotId, message);
+            return HttpResponses.badRequest(message);
+        }
+
         var sessionId = UUID.randomUUID().toString();
         var callToAgent = new callToAgent(slotId, "London");
 
@@ -59,9 +72,7 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
         log.info("For dateTime slot {}, State of requirements is {}", report.timeSlotId(), report.meetsRequirements());
         log.info("LLM Justification: {}", report.justification());
 
-        var areParticipantsAvailable = areParticipantsStatus(slotId, request.studentId, request.aircraftId, request.instructorId, "AVAILABLE");
-        System.out.println(areParticipantsAvailable);
-        if (areParticipantsAvailable.studentState && areParticipantsAvailable.aircraftState && areParticipantsAvailable.instructorState && report.meetsRequirements()) {
+        if (report.meetsRequirements()) {
             log.info("Creating booking for slot {}: {}", slotId, request);
             componentClient
                     .forEventSourcedEntity(slotId)
@@ -72,19 +83,10 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
                             request.instructorId,
                             request.bookingId
                     ));
-            return HttpResponses.created();
-        } else if (!report.meetsRequirements()) {
+            return HttpResponses.created("Booking created successfully with Booking Id: "+ request.bookingId);
+        } else {
             log.warn("Booking creation failed for slot {} due to Weather Report: {}", slotId, report.justification());
             return HttpResponses.badRequest("Booking creation failed due to Weather Report: \nLLM Justification: " + report.justification());
-        } else {
-            StringBuilder unavailable = new StringBuilder("ERROR! Cannot book timeslot as following participants are unavailable: ");
-            if (!areParticipantsAvailable.studentState) unavailable.append("Student ");
-            if (!areParticipantsAvailable.aircraftState) unavailable.append("Aircraft ");
-            if (!areParticipantsAvailable.instructorState) unavailable.append("Instructor ");
-
-            String message = unavailable.toString().trim().replaceAll(" +", " ");
-            log.warn("Booking creation failed for slot {}: {}", slotId, message);
-            return HttpResponses.badRequest(message);
         }
     }
 

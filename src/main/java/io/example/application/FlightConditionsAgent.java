@@ -6,18 +6,6 @@ import akka.javasdk.annotations.Component;
 import akka.javasdk.annotations.FunctionTool;
 import akka.javasdk.client.ComponentClient;
 
-import java.io.IOException;
-import java.net.URI;
-import java.net.URLEncoder;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
 /*
  * The flight conditions agent is responsible for making a determination about the flight
  * conditions for a given day and time. You will need to clearly define the success criteria
@@ -36,12 +24,12 @@ import java.util.regex.Pattern;
 public class FlightConditionsAgent extends Agent {
 
     private final ComponentClient componentClient;
-    private final GoogleWeatherSerivce googleWeatherSerivce;
+    private final GoogleWeatherService googleWeatherSerivce;
 
 
     public FlightConditionsAgent(ComponentClient componentClient) {
         this.componentClient = componentClient;
-        this.googleWeatherSerivce = new GoogleWeatherSerivce();
+        this.googleWeatherSerivce = new GoogleWeatherService();
     }
 
     public record ConditionsReport(String timeSlotId, Boolean meetsRequirements, String justification) {

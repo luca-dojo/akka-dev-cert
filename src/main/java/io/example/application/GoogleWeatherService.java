@@ -2,8 +2,9 @@ package io.example.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -14,16 +15,17 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
-import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class GoogleWeatherSerivce {
+public class GoogleWeatherService {
 
+    private static final ObjectMapper mapper = new ObjectMapper();
+    private static final Logger log = LoggerFactory.getLogger(GoogleWeatherService.class);
     private final HttpClient httpClient;
     private final String apiKey;
 
-    public GoogleWeatherSerivce(){
+    public GoogleWeatherService(){
         this.httpClient = HttpClient.newHttpClient();
         this.apiKey = System.getenv("GOOGLE_API_KEY");
     }
@@ -31,35 +33,65 @@ public class GoogleWeatherSerivce {
     public record LatLong(double latitude, double longitude) {}
 
     public String getGoogleWeather(String timeSlotId, String location) {
-        // timeSlotId example: "2026-11-11-23"
-        var geocode = getLongLat(location);
-
+        // example timeSlotId = 2025-12-26-12
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH");
         LocalDateTime targetTime = LocalDateTime.parse(timeSlotId, formatter);
 
         long hoursUntilTarget = ChronoUnit.HOURS.between(LocalDateTime.now(ZoneId.of("UTC")), targetTime);
+
         if (hoursUntilTarget < 0 || hoursUntilTarget > 240) {
             throw new IllegalArgumentException("Target time must be within the next 240 hours (10 days).");
         }
 
-        String weatherUrl = String.format(
+        var geocode = getLongLat(location);
+        String baseUrl = String.format(
                 "https://weather.googleapis.com/v1/forecast/hours:lookup?location.latitude=%f&location.longitude=%f&key=%s",
-                geocode.latitude,
-                geocode.longitude,
-                apiKey
+                geocode.latitude, geocode.longitude, apiKey
         );
 
-        try {
-            HttpRequest weatherRequest = HttpRequest.newBuilder().uri(URI.create(weatherUrl)).GET().build();
-            HttpResponse<String> weatherResponse = httpClient.send(weatherRequest, HttpResponse.BodyHandlers.ofString());
+        int targetPageIndex = (int) (hoursUntilTarget / 24);
 
-            if (weatherResponse.statusCode() != 200) {
-                throw new RuntimeException("Weather API failed: " + weatherResponse.body());
+        String currentToken = null;
+
+        try {
+            for (int i = 0; i <= targetPageIndex; i++) {
+
+                String requestUrl = baseUrl;
+                if (currentToken != null) {
+                    requestUrl += "&page_token=" + URLEncoder.encode(currentToken, StandardCharsets.UTF_8);
+                }
+
+                HttpRequest weatherRequest = HttpRequest.newBuilder()
+                        .uri(URI.create(requestUrl))
+                        .GET()
+                        .build();
+
+                HttpResponse<String> weatherResponse = httpClient.send(weatherRequest, HttpResponse.BodyHandlers.ofString());
+
+                if (weatherResponse.statusCode() != 200) {
+                    throw new RuntimeException("Weather API failed: " + weatherResponse.body());
+                }
+
+                String responseBody = weatherResponse.body();
+
+                // If we are at the target index, return the body
+                if (i == targetPageIndex) {
+                    log.info("Target Date Time found on Page {} of Google Weather API Response", targetPageIndex);
+                    return responseBody;
+                }
+
+                JsonNode root = mapper.readTree(responseBody);
+                if (root.has("nextPageToken")) {
+                    currentToken = root.get("nextPageToken").asText();
+                } else {
+                    // If we run out of tokens before reaching the target page, the date is out of range
+                    throw new RuntimeException("Target time " + timeSlotId + " is beyond the available forecast pages.");
+                }
             }
-            return weatherResponse.body();
         } catch (Exception e) {
             throw new RuntimeException("API Service Failure: ", e);
         }
+        throw new RuntimeException("Unexpected execution state.");
     }
 
     private LatLong getLongLat(String location) {
