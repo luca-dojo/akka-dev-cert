@@ -3,12 +3,10 @@ package io.example.api;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Collections;
-import java.util.List;
 import java.util.UUID;
 
 import io.example.application.BookingSlotEntity;
 import io.example.application.FlightConditionsAgent;
-import io.example.application.ParticipantSlotEntity;
 import io.example.application.ParticipantSlotsView;
 import io.example.domain.Participant;
 import org.slf4j.Logger;
@@ -47,9 +45,12 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
         // String studentId, String aircraftId, String instructorId, String bookingId
         // Implementation here
 
-        // TODO: Create a booking workflow so that we can check flight conditions before booking.
+        // Check to see if slot provided is valid
+        isSlotIdValid(slotId, true);
+
         var sessionId = UUID.randomUUID().toString();
         var callToAgent = new callToAgent(slotId, "London");
+
         FlightConditionsAgent.ConditionsReport report = componentClient.forAgent()
                 .inSession(sessionId)
                 .method(FlightConditionsAgent::weatherReport)
@@ -58,7 +59,8 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
         log.info("For dateTime slot {}, State of requirements is {}", report.timeSlotId(), report.meetsRequirements());
         log.info("LLM Justification: {}", report.justification());
 
-        var areParticipantsAvailable = areParticipantsStatus(request.studentId, request.aircraftId, request.instructorId, "AVAILABLE");
+        var areParticipantsAvailable = areParticipantsStatus(slotId, request.studentId, request.aircraftId, request.instructorId, "AVAILABLE");
+        System.out.println(areParticipantsAvailable);
         if (areParticipantsAvailable.studentState && areParticipantsAvailable.aircraftState && areParticipantsAvailable.instructorState && report.meetsRequirements()) {
             log.info("Creating booking for slot {}: {}", slotId, request);
             componentClient
@@ -71,6 +73,9 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
                             request.bookingId
                     ));
             return HttpResponses.created();
+        } else if (!report.meetsRequirements()) {
+            log.warn("Booking creation failed for slot {} due to Weather Report: {}", slotId, report.justification());
+            return HttpResponses.badRequest("Booking creation failed due to Weather Report: \nLLM Justification: " + report.justification());
         } else {
             StringBuilder unavailable = new StringBuilder("ERROR! Cannot book timeslot as following participants are unavailable: ");
             if (!areParticipantsAvailable.studentState) unavailable.append("Student ");
@@ -79,7 +84,7 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
 
             String message = unavailable.toString().trim().replaceAll(" +", " ");
             log.warn("Booking creation failed for slot {}: {}", slotId, message);
-            return HttpResponses.badRequest(message + "\nLLM Justification: " + report.justification());
+            return HttpResponses.badRequest(message);
         }
     }
 
@@ -146,9 +151,9 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
     @Post("/availability/{slotId}")
     public HttpResponse markAvailable(String slotId, AvailabilityRequest request) {
         ParticipantType participantType;
-        if (!isSlotIdValid(slotId)) {
-            throw new IllegalArgumentException("Invalid slot: "+slotId);
-        }
+
+        // Check to see if slot provided is valid
+        isSlotIdValid(slotId, false);
 
         try {
             participantType = ParticipantType.valueOf(request.participantType().trim().toUpperCase());
@@ -163,10 +168,8 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
                 .method(ParticipantSlotsView::getSlotsByParticipantAndStatus)
                 .invoke(new ParticipantSlotsView.ParticipantStatusInput(request.participantId, "BOOKED"));
 
-        if (participantBookedSlots.slots().isEmpty()) {
+        if (participantBookedSlots.slots().stream().noneMatch(slotRow -> slotRow.slotId().equals(slotId))) {
             log.info("Marking timeslot available for entity {}", slotId);
-
-            // Add entity client to mark slot available
             componentClient
                     .forEventSourcedEntity(slotId)
                     .method(BookingSlotEntity::markSlotAvailable)
@@ -182,21 +185,24 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
     @Delete("/availability/{slotId}")
     public HttpResponse unmarkAvailable(String slotId, AvailabilityRequest request) {
         ParticipantType participantType;
+
+        // Check to see if slot provided is valid
+        isSlotIdValid(slotId, false);
+
         try {
             participantType = ParticipantType.valueOf(request.participantType().trim().toUpperCase());
         } catch (IllegalArgumentException ex) {
             log.warn("Bad participant type {}", request.participantType());
             throw HttpException.badRequest("invalid participant type");
         }
+
         // checking that a participant is not already booked on the chosen slot
         var participantBookedSlots = componentClient
                 .forView()
                 .method(ParticipantSlotsView::getSlotsByParticipantAndStatus)
                 .invoke(new ParticipantSlotsView.ParticipantStatusInput(request.participantId, "BOOKED"));
 
-        if (participantBookedSlots.slots().isEmpty()) {
-
-            // Add code to unmark slot as available
+        if (participantBookedSlots.slots().stream().noneMatch(slotRow -> slotRow.slotId().equals(slotId))) {
             componentClient
                     .forEventSourcedEntity(slotId)
                     .method(BookingSlotEntity::unmarkSlotAvailable)
@@ -223,7 +229,7 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
     public record callToAgent(String timeSlotID, String location) {}
 
     //Public helper function to check which participants are available for slot
-    public ParticipantIsState areParticipantsStatus(String studentId, String aircraftId, String instructorId, String status) {
+    public ParticipantIsState areParticipantsStatus(String slotId, String studentId, String aircraftId, String instructorId, String status) {
         var studentSlotRow = componentClient.forView()
                 .method(ParticipantSlotsView::getSlotsByParticipant)
                 .invoke(studentId);
@@ -236,33 +242,29 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
 
         return new ParticipantIsState(studentSlotRow.slots()
                 .stream()
-                .anyMatch(slotRow -> status.equals(slotRow.status())),
+                .anyMatch(slotRow -> status.equals(slotRow.status()) && slotRow.slotId().equals(slotId)),
                 aircraftSlotRow.slots()
                 .stream()
-                .anyMatch(slotRow -> status.equals(slotRow.status())),
+                .anyMatch(slotRow -> status.equals(slotRow.status()) && slotRow.slotId().equals(slotId)),
                 instructorSlotRow.slots()
                 .stream()
-                .anyMatch(slotRow -> status.equals(slotRow.status())));
+                .anyMatch(slotRow -> status.equals(slotRow.status()) && slotRow.slotId().equals(slotId)));
     }
 
     //Public helper function to check whether a slotId is valid
-    public Boolean isSlotIdValid(String slotId) {
-        try {
-            LocalDateTime dateTime = getBookingStartTime(slotId);
-            if (dateTime.isBefore(LocalDateTime.now())) {
-                throw HttpException.badRequest("Booking slot start time is in the past");
-            } else {
-                return true;
-            }
-        } catch (Exception e) {
-            return false;
+    public void isSlotIdValid(String slotId, boolean isBooking) {
+        LocalDateTime dateTime = getBookingStartTime(slotId);
+        if (dateTime.isBefore(LocalDateTime.now()) && !isBooking) {
+            throw HttpException.badRequest("Booking slot start time is in the past");
+        } else if (dateTime.isAfter(LocalDateTime.now().plusDays(10)) && isBooking) {
+            throw HttpException.badRequest("Booking slot start time must be within the next 240 hours (10 days) " +
+                    "in order to get a valid weather forecast.");
         }
     }
 
     public LocalDateTime getBookingStartTime(String slotId) {
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH");
-        LocalDateTime dateTime = LocalDateTime.parse(slotId, formatter);
-        return dateTime;
+        return LocalDateTime.parse(slotId, formatter);
     }
 
 }
