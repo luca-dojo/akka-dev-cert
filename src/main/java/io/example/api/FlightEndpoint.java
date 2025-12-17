@@ -94,7 +94,7 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
     // ID and the booking ID are required.
     @Delete("/bookings/{slotId}/{bookingId}")
     public HttpResponse cancelBooking(String slotId, String bookingId) {
-        log.info("Canceling booking id {}", bookingId);
+        log.info("Attempting to cancel booking with Booking Id: {}", bookingId);
 
         try {
             // get participants by booking id
@@ -109,9 +109,11 @@ public class FlightEndpoint extends AbstractHttpEndpoint {
                         .forEventSourcedEntity(slotId)
                         .method(BookingSlotEntity::cancelBooking)
                         .invoke(bookingId);
+
+                //TODO: Add code here to make the participants available again after booking cancelled?
                 return HttpResponses.ok();
             } else {
-                log.warn("Booking creation failed for slot: {}", bookingId);
+                log.warn("Booking cancelling failed for slot: {}", bookingId);
                 return HttpResponses.badRequest("No Booking with id: "+bookingId);
             }
         } catch (Exception e) {
